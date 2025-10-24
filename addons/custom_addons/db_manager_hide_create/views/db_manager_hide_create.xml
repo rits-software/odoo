@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<odoo>
+    <template id="database_manager_custom" inherit_id="web.database_manager">
+        <xpath expr="//a[@id='create_db']" position="attributes">
+            <attribute name="style">display:none;</attribute>
+        </xpath>
+    </template>
+</odoo>
