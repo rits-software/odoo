@@ -1,8 +1,13 @@
 [phases.setup]
 aptPkgs = [
+  "...",
   "libsasl2-dev",
   "libldap2-dev",
   "libssl-dev",
+  "libffi-dev",
   "build-essential",
-  "python3-dev"
+  "python3-dev",
+  "gcc",
+  "g++",
+  "pkg-config"
 ]
