@@ -70,7 +70,8 @@ class PosOrder(models.Model):
         draft = True if order.get('state') == 'draft' else False
         pos_session = self.env['pos.session'].browse(order['session_id'])
         if pos_session.state == 'closing_control' or pos_session.state == 'closed':
-            order['session_id'] = self._get_valid_session(order).id
+            pos_session = self._get_valid_session(order)
+            order['session_id'] = pos_session.id
 
         if not order.get('source'):
             order['source'] = 'pos'
@@ -82,6 +83,9 @@ class PosOrder(models.Model):
                     "partner_id": False,
                     "to_invoice": False,
                 })
+
+        if not order.get('company_id'):
+            order['company_id'] = pos_session.config_id.company_id.id
 
         pos_order = False
         record_uuid_mapping = order.pop('relations_uuid_mapping', {})
@@ -188,7 +192,7 @@ class PosOrder(models.Model):
             return_payment_vals = {
                 'name': _('return'),
                 'pos_order_id': order.id,
-                'amount': -pos_order['amount_return'],
+                'amount': pos_order['amount_return'],
                 'payment_date': fields.Datetime.now(),
                 'payment_method_id': cash_payment_method.id,
                 'is_change': True,
@@ -209,7 +213,7 @@ class PosOrder(models.Model):
     @api.model
     def _get_invoice_lines_values(self, line_values, pos_line, move_type):
         # correct quantity sign based on move type and if line is refund.
-        is_refund_order = pos_line.order_id.amount_total < 0.0
+        is_refund_order = pos_line.order_id.is_refund
         qty_sign = -1 if (
             (move_type == 'out_invoice' and is_refund_order)
             or (move_type == 'out_refund' and not is_refund_order)
@@ -276,7 +280,7 @@ class PosOrder(models.Model):
     def _get_pos_anglo_saxon_price_unit(self, product, partner_id, quantity):
         moves = self.filtered(lambda o: o.partner_id.id == partner_id)\
             .mapped('picking_ids.move_ids')\
-            .filtered(lambda m: m.is_valued and m.product_id.valuation == 'real_time')\
+            .filtered(lambda m: m.is_valued and m.product_id.valuation == 'real_time' and m.product_id.id == product.id)\
             .sorted(lambda x: x.date)
         return moves._get_price_unit()
 
@@ -302,7 +306,8 @@ class PosOrder(models.Model):
     country_code = fields.Char(related='company_id.account_fiscal_country_id.code')
     pricelist_id = fields.Many2one('product.pricelist', string='Pricelist')
     partner_id = fields.Many2one('res.partner', string='Customer', change_default=True, index='btree_not_null')
-    sequence_number = fields.Integer(string='Sequence Number', help='A session-unique sequence number for the order. Negative if generated from the client', default=1)
+    sequence_number = fields.Integer(string='Sequence Number', copy=False,
+                                     help='A session-unique sequence number for the order. Negative if generated from the client')
     session_id = fields.Many2one('pos.session', string='Session', index=True, domain="[('state', '=', 'opened')]")
     config_id = fields.Many2one('pos.config', compute='_compute_order_config_id', string="Point of Sale", readonly=False, store=True)
     currency_id = fields.Many2one('res.currency', related='config_id.currency_id', string="Currency")
@@ -408,7 +413,7 @@ class PosOrder(models.Model):
     def _compute_refund_related_fields(self):
         for order in self:
             order.refund_orders_count = len(order.mapped('lines.refund_orderline_ids.order_id'))
-            order.refunded_order_id = order.lines.refunded_orderline_id.order_id
+            order.refunded_order_id = next(iter(order.lines.refunded_orderline_id.order_id), False)
 
     @api.depends('lines.refunded_qty', 'lines.qty')
     def _compute_has_refundable_lines(self):
@@ -470,10 +475,13 @@ class PosOrder(models.Model):
     @api.depends('lines.margin', 'is_total_cost_computed')
     def _compute_margin(self):
         for order in self:
+            sign = -1 if order.is_refund else 1
             if order.is_total_cost_computed:
                 order.margin = sum(order.lines.mapped('margin'))
-                amount_untaxed = order.currency_id.round(sum(line.price_subtotal for line in order.lines))
-                order.margin_percent = not float_is_zero(amount_untaxed, precision_rounding=order.currency_id.rounding) and order.margin / amount_untaxed or 0
+                amount_untaxed = order.currency_id.round(sum(line.price_subtotal for line in order.lines)) * sign
+                order.margin_percent = not float_is_zero(amount_untaxed, precision_rounding=order.currency_id.rounding) \
+                                        and order.margin / amount_untaxed \
+                                        or 0
             else:
                 order.margin = 0
                 order.margin_percent = 0
@@ -535,6 +543,15 @@ class PosOrder(models.Model):
             vals = self._complete_values_from_session(session, vals)
         return super().create(vals_list)
 
+    def _update_sequence_number(self, session, values):
+        # Some localization needs orders to have a sequence number
+        values['sequence_number'] = (
+            session.config_id.order_seq_id
+            ._next()
+            .removeprefix(session.config_id.order_seq_id.prefix or '')
+            .removesuffix(session.config_id.order_seq_id.suffix or '')
+        )
+
     @api.model
     def _complete_values_from_session(self, session, values):
         values.setdefault('pricelist_id', session.config_id.pricelist_id.id)
@@ -547,7 +564,7 @@ class PosOrder(models.Model):
             values['tracking_number'] = tracking_number
 
         if not values.get('sequence_number'):
-            values['sequence_number'] = session.config_id.order_seq_id._next()  # Some localization needs orders to have a sequence number
+            self._update_sequence_number(session, values)
 
         return values
 
@@ -575,7 +592,7 @@ class PosOrder(models.Model):
                     raise UserError(_('The paid amount is different from the total amount of the order.'))
                 elif totally_paid_or_more > 0 and order.state == 'paid':
                     list_line.append(_("Warning, the paid amount is higher than the total amount. (Difference: %s)", formatLang(self.env, order.amount_paid - order.amount_total, currency_obj=order.currency_id)))
-                if order.nb_print > 0 and vals.get('payment_ids'):
+                if order.nb_print > 0 and any(command[0] in [0, 1] and command[2].get('payment_status') and command[2]['payment_status'] != 'cancelled' for command in vals.get('payment_ids')):
                     raise UserError(_('You cannot change the payment of a printed order.'))
 
         if len(list_line) > 0:
@@ -653,8 +670,13 @@ class PosOrder(models.Model):
         if self.refunded_order_id.exists():
             return _('%(refunded_order)s REFUND', refunded_order=self.refunded_order_id.name)
         else:
-            last_reference_part = self.pos_reference.split('-')[-1]
-            return f"{session.config_id.name} - {last_reference_part}"
+            last_reference_part = self.get_reference_last_part()
+            prefix = session.config_id.order_seq_id.prefix or session.config_id.name
+            suffix = f" - {session.config_id.order_seq_id.suffix}" if session.config_id.order_seq_id.suffix else ''
+            return f"{prefix} - {last_reference_part}{suffix}"
+
+    def get_reference_last_part(self):
+        return self.pos_reference.split('-')[-1]
 
     def action_stock_picking(self):
         self.ensure_one()
@@ -847,8 +869,7 @@ class PosOrder(models.Model):
         fiscal_position = self.fiscal_position_id
         pos_config = self.config_id
         rounding_method = pos_config.rounding_method
-        amount_total = sum(order.amount_total for order in self)
-        move_type = 'out_invoice' if amount_total >= 0 else 'out_refund'
+        move_type = 'out_invoice' if not any(order.is_refund for order in self) else 'out_refund'
         invoice_payment_term_id = (
             self.partner_id.property_payment_term_id.id
             if self.partner_id.property_payment_term_id and any(p.payment_method_id.type == 'pay_later' for p in self.payment_ids)
@@ -863,6 +884,7 @@ class PosOrder(models.Model):
             'journal_id': self.config_id.invoice_journal_id.id,
             'move_type': move_type,
             'partner_id': self.partner_id.address_get(['invoice'])['invoice'],
+            'partner_shipping_id': self.partner_id.address_get(['delivery'])['delivery'],
             'partner_bank_id': self._get_partner_bank_id(),
             'currency_id': self.currency_id.id,
             'invoice_date': invoice_date.astimezone(timezone).date(),
@@ -969,7 +991,7 @@ class PosOrder(models.Model):
                         'display_type': 'rounding',
                     })
         # Stock.
-        if self.company_id.anglo_saxon_accounting and self.picking_ids.ids:
+        if self.company_id.inventory_valuation == 'real_time' and self.picking_ids.ids:
             stock_moves = self.env['stock.move'].sudo().search([
                 ('picking_id', 'in', self.picking_ids.ids),
                 ('product_id.valuation', '=', 'real_time'),
@@ -1135,6 +1157,8 @@ class PosOrder(models.Model):
         next_days_orders = self.filtered(lambda order: order.preset_time and order.preset_time.date() > fields.Date.today() and order.state == 'draft')
         next_days_orders.session_id = False
         today_orders.write({'state': 'cancel'})
+        for config in today_orders.config_id:
+            config.notify_synchronisation(config.current_session_id.id, self.env.context.get('device_identifier', 0))
         return {
             'pos.order': self._load_pos_data_read(today_orders, self.config_id)
         }
@@ -1212,7 +1236,7 @@ class PosOrder(models.Model):
 
     def read_pos_data(self, data, config):
         # If the previous session is closed, the order will get a new session_id due to _get_valid_session in _process_order
-        account_moves = self.sudo().account_move | self.sudo().payment_ids.account_move_id
+        account_moves = self.sudo().account_move | self.sudo().payment_ids.account_move_id | self.sudo().session_move_id
         return {
             'pos.order': self._load_pos_data_read(self, config) if config else [],
             'pos.session': [],
@@ -1692,7 +1716,7 @@ class PosOrderLine(models.Model):
             'date_deadline': date_deadline,
             'route_ids': self.order_id.config_id.route_id,
             'warehouse_id': self.order_id.config_id.warehouse_id or False,
-            'partner_id': self.order_id.partner_id.id,
+            'partner': self.order_id.partner_id,
             'product_description_variants': self.full_product_name,
             'company_id': self.order_id.company_id,
             'reference_ids': self.order_id.stock_reference_ids,
@@ -1775,12 +1799,15 @@ class PosOrderLine(models.Model):
     @api.depends('price_subtotal', 'total_cost')
     def _compute_margin(self):
         for line in self:
+            sign = -1 if line.order_id.is_refund else 1
             if line.product_id.type == 'combo':
                 line.margin = 0
                 line.margin_percent = 0
             else:
-                line.margin = line.price_subtotal - line.total_cost
-                line.margin_percent = not float_is_zero(line.price_subtotal, precision_rounding=line.currency_id.rounding) and line.margin / line.price_subtotal or 0
+                line.margin = (line.price_subtotal * sign) - line.total_cost
+                line.margin_percent = not float_is_zero(line.price_subtotal, precision_rounding=line.currency_id.rounding) \
+                                        and line.margin / (line.price_subtotal * sign) \
+                                        or 0
 
     def _prepare_base_line_for_taxes_computation(self):
         self.ensure_one()

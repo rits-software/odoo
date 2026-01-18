@@ -15,6 +15,7 @@ import { MAIN_PLUGINS } from "../src/plugin_sets";
 import { setupEditor } from "./_helpers/editor";
 import { getContent, setSelection } from "./_helpers/selection";
 import { insertText, tripleClick } from "./_helpers/user_actions";
+import { withSequence } from "@html_editor/utils/resource";
 
 test("getEditableSelection should work, even if getSelection returns null", async () => {
     const { editor } = await setupEditor("<p>a[b]</p>");
@@ -75,8 +76,12 @@ test("correct selection after triple click with bold", async () => {
 test.tags("desktop");
 test("selection on triple click should be contained in the paragraph", async () => {
     const { el } = await setupEditor("<div><p>[]abc</p><br><br><h2>def</h2></div>");
-    await tripleClick(el.querySelector("p"));
-    expect(getContent(el)).toBe("<div><p>[abc]</p><br><br><h2>def</h2></div>");
+    await tripleClick(el.querySelector("p:not([data-selection-placeholder])"));
+    expect(getContent(el)).toBe(
+        '<p data-selection-placeholder=""><br></p>' +
+            "<div><p>[abc]</p><br><br><h2>def</h2></div>" +
+            '<p data-selection-placeholder=""><br></p>'
+    );
 });
 
 test.tags("desktop");
@@ -89,7 +94,7 @@ test("correct selection after triple click in multi-line block (1)", async () =>
 test.tags("desktop");
 test("correct selection after triple click in multi-line block (2)", async () => {
     const { el } = await setupEditor("<p>block1</p><p>[]block2<br>block2</p><p>block3</p>", {});
-    await tripleClick(queryFirst("p").nextSibling.firstChild); // we triple click inside block2
+    await tripleClick(queryFirst("p:not([data-selection-placeholder])").nextSibling.firstChild); // we triple click inside block2
     expect(getContent(el)).toBe("<p>block1</p><p>[block2<br>block2]</p><p>block3</p>");
 });
 
@@ -179,7 +184,11 @@ test("setSelection should not set the selection outside the editable", async () 
 test("press 'ctrl+a' in 'oe_structure' child should only select his content", async () => {
     const { el } = await setupEditor(`<div class="oe_structure"><p>a[]b</p><p>cd</p></div>`);
     await press(["ctrl", "a"]);
-    expect(getContent(el)).toBe(`<div class="oe_structure"><p>[ab]</p><p>cd</p></div>`);
+    expect(getContent(el)).toBe(
+        '<p data-selection-placeholder=""><br></p>' +
+            `<div class="oe_structure"><p>[ab]</p><p>cd</p></div>` +
+            '<p data-selection-placeholder=""><br></p>'
+    );
 });
 
 test("press 'ctrl+a' in 'contenteditable' should only select his content", async () => {
@@ -188,7 +197,7 @@ test("press 'ctrl+a' in 'contenteditable' should only select his content", async
     );
     await press(["ctrl", "a"]);
     expect(getContent(el)).toBe(
-        `<div contenteditable="false"><p contenteditable="true">[ab]</p><p contenteditable="true">cd</p></div>`
+        `<p data-selection-placeholder=""><br></p><div contenteditable="false"><p contenteditable="true">[ab]</p><p contenteditable="true">cd</p></div><p data-selection-placeholder=""><br></p>`
     );
 });
 
@@ -388,12 +397,14 @@ describe("getTargetedNodes", () => {
                 const { el: editable, editor } = await setupEditor(
                     "<div><p>a[bc</p><div>d]ef</div></div>"
                 );
-                const outerDiv = editable.firstChild;
+                const outerDiv = editable.querySelector("div");
                 const p1 = outerDiv.firstChild; // The selection crossed `</p>` -> include it.
                 const abc = p1.firstChild;
                 const innerDiv = p1.nextSibling; // The selection crossed `<div>` -> include it.
                 const def = innerDiv.firstChild;
-                const result = editor.shared.selection.getTargetedNodes();
+                const result = editor.shared.selection
+                    .getTargetedNodes()
+                    .filter((node) => !node.hasAttribute?.("data-selection-placeholder"));
                 expect(result).toEqual([p1, abc, innerDiv, def]);
             });
 
@@ -420,14 +431,16 @@ describe("getTargetedNodes", () => {
                 const span1 = p1.firstChild; // The selection crossed `</span>` -> include it.
                 // "ab" isn't included because no part of it is selected.
                 const cd = p1.lastChild;
-                const div = editable.lastChild;
+                const div = editable.querySelector("div");
                 const p2 = div.firstChild;
                 const span2 = p2.firstChild; // The selection crossed `<span class="b">` -> include it.
                 const b = span2.firstChild;
                 const e = b.firstChild;
                 const i = b.nextSibling; // The selection crossed `<i>` -> include it.
                 const fg = i.firstChild;
-                const result = editor.shared.selection.getTargetedNodes();
+                const result = editor.shared.selection
+                    .getTargetedNodes()
+                    .filter((node) => !node.hasAttribute?.("data-selection-placeholder"));
                 expect(result).toEqual([p1, span1, cd, div, p2, span2, b, e, i, fg]);
             });
         });
@@ -1176,4 +1189,23 @@ test("should not autoscroll if selection is partially visible in viewport", asyn
     // Ensure that extending selection did not trigger any auto-scrolling.
     expect(scrollableElement.scrollTop).toBe(scrollTop);
     expect(isInViewPort(lastParagraph)).toBe(false);
+});
+
+describe("crash fixes", () => {
+    test("Should survive disconnected anchor", async () => {
+        class TestPlugin extends Plugin {
+            static id = "test";
+            resources = {
+                selectionchange_handlers: withSequence(-1, (selectionData) => {
+                    const { anchorNode } = selectionData.editableSelection;
+                    anchorNode.parentElement.remove();
+                }),
+            };
+        }
+
+        const { el } = await setupEditor("<p>x<span>a[]</span></p>", {
+            config: { Plugins: [...MAIN_PLUGINS, TestPlugin] },
+        });
+        expect(getContent(el)).toBe("<p>x[]</p>");
+    });
 });

@@ -1854,3 +1854,69 @@ class TestSaleProject(TestSaleProjectCommon):
             so.project_ids.allow_milestones,
             'The generated project should have the "Allow Milestones" setting enabled, as one of the products has invoice policy based on milestones.',
         )
+
+    def test_sale_order_creation_without_service_product_for_project(self):
+        """Test that a sale order is created for a project using a non-service product"""
+        self.project_global.partner_id = self.partner
+        action_dict = self.project_global.with_context(
+            create_for_project_id=self.project_global.id,
+            default_project_id=self.project_global.id,
+            default_partner_id=self.partner.id
+        ).action_view_sos()
+
+        self.product_milestone.type = 'consu'
+        sale_order = self.env['sale.order'].with_context(action_dict['context']).create({
+            'order_line': [Command.create({
+                'product_id': self.product_milestone.id,
+                'product_uom_qty': 1,
+            })],
+        })
+
+        self.assertEqual(sale_order.project_id, self.project_global)
+        self.assertEqual(sale_order.partner_id, self.partner)
+        self.assertFalse(self.project_global.sale_line_id)
+        self.assertEqual(self.project_global.reinvoiced_sale_order_id, sale_order)
+
+    def test_allocated_hours_manual_delivery_service(self):
+        """
+        Test that allocated_hours match the quantity ordered on creation
+        when the service product has 'delivered_manual' service policy.
+        """
+        self.product_service_delivered_manual.service_tracking = 'task_in_project'
+        so = self.env['sale.order'].create({'partner_id': self.partner.id})
+        sol = self.env['sale.order.line'].create({
+            'order_id': so.id,
+            'product_id': self.product_service_delivered_manual.id,
+            'product_uom_qty': 10,
+        })
+        so.action_confirm()
+        self.assertEqual(sol.task_id.allocated_hours, 10, "The allocated hours should be 10.")
+
+    def test_quotation_with_zero_unit_project_service(self):
+        """
+        Test checking that a project doesn't get created on order when ordering 0 units of the corresponding
+         product service if it is optional. If the unit is increased to 1, a project should be created.
+        """
+        sale_order_with_option = self.env['sale.order'].create({
+            'partner_id': self.partner.id,
+            'order_line': [
+                Command.create({
+                    'product_id': self.product_a.id,
+                    'product_uom_qty': 1,
+                }),
+                Command.create({
+                    'display_type': 'line_section',
+                    'name': "Optional products",
+                    'is_optional': True,
+                }),
+                Command.create({
+                    'product_id': self.product_order_service4.id,
+                    'product_uom_qty': 0,
+                }),
+            ],
+        })
+        optional_product_line = sale_order_with_option.order_line.filtered(lambda line: not line.display_type and line._is_line_optional())
+        sale_order_with_option.action_confirm()
+        self.assertFalse(optional_product_line.project_id)
+        optional_product_line.write({'product_uom_qty': 1})
+        self.assertEqual(optional_product_line.project_id.sale_order_id, sale_order_with_option)

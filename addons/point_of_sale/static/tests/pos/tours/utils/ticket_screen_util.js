@@ -206,6 +206,12 @@ export function refundedNoteContains(text) {
         trigger: `.ticket-screen .refund-note:contains("${text}")`,
     });
 }
+export function noLinesToRefund() {
+    return inLeftSide({
+        content: "No lines are marked for to refund or refunding",
+        trigger: ".ticket-screen:not(:has(.to-refund-highlight))",
+    });
+}
 export function tipContains(amount) {
     return [
         {
@@ -238,5 +244,12 @@ export function checkCameraIsOpen() {
     return {
         content: "Verify that the camera view is visible in the left pane.",
         trigger: ".ticket-screen .leftpane .o_crop_container",
+    };
+}
+
+export function noOrderIsThere() {
+    return {
+        content: "No orders should be visible on the Ticket Screen",
+        trigger: ".ticket-screen:not(:has(.order-row))",
     };
 }

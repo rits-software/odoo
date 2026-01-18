@@ -1,5 +1,7 @@
 import { isBlock } from "@html_editor/utils/blocks";
 import { getAdjacentPreviousSiblings } from "@html_editor/utils/dom_traversal";
+import { loadImage } from "@html_editor/utils/image_processing";
+import { getImageSrc } from "@html_editor/utils/image";
 import { blendColors } from "@web/core/utils/colors";
 
 function parentsGet(node, root = undefined) {
@@ -82,6 +84,10 @@ const GROUPED_STYLES = {
         "border-right-style",
         "border-bottom-style",
         "border-left-style",
+        "border-top-color",
+        "border-right-color",
+        "border-bottom-color",
+        "border-left-color",
     ],
     padding: ["padding-top", "padding-bottom", "padding-left", "padding-right"],
     margin: ["margin-top", "margin-bottom", "margin-left", "margin-right"],
@@ -865,9 +871,17 @@ function enforceImagesResponsivity(element) {
  *                            specificity: number;}>
  */
 export async function toInline(element, cssRules) {
+    await waitUntilImagesLoaded(element);
     // Fix card-img-top heights (must happen before we transform everything).
     for (const imgTop of element.querySelectorAll(".card-img-top")) {
         imgTop.style.setProperty("height", _getHeight(imgTop) + "px");
+    }
+
+    // Fix empty element heights to be always visible as they might have borders
+    // (used as separation) and can be rendered with height 0px.
+    // like having empty div with % height and display inline-block.
+    for (const el of element.querySelectorAll(".o_not_editable[class*='border-']:empty")) {
+        el.style.height = getComputedStyle(el).height;
     }
 
     attachmentThumbnailToLinkImg(element);
@@ -2112,4 +2126,15 @@ function correctBorderAttributes(style) {
         return style;
     }
     return style.trim().replace(/;?$/, "; border-style: solid;");
+}
+
+function waitUntilImagesLoaded(root) {
+    const promises = [];
+    for (const img of root.querySelectorAll('img[src]:not([src=""])')) {
+        const src = getImageSrc(img);
+        if (src) {
+            promises.push(loadImage(src));
+        }
+    }
+    return Promise.allSettled(promises);
 }

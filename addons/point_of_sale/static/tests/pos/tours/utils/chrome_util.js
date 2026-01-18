@@ -1,3 +1,4 @@
+/* global posmodel */
 import * as Dialog from "@point_of_sale/../tests/generic_helpers/dialog_util";
 import { negate } from "@point_of_sale/../tests/generic_helpers/utils";
 import * as Numpad from "@point_of_sale/../tests/generic_helpers/numpad_util";
@@ -90,7 +91,7 @@ export function doCashMove(amount, reason) {
         })),
         {
             isActive: ["mobile"],
-            trigger: ".o-overlay-item:nth-child(2) .modal-footer button:contains('Ok')",
+            trigger: ".o-overlay-item:nth-child(2) .modal-footer button:contains('Confirm')",
             run: "click",
         },
         Dialog.confirm(),
@@ -132,6 +133,12 @@ export function clickBtn(name, { expectUnloadPage = false } = {}) {
         trigger: `body button:contains(${name})`,
         run: "click",
         expectUnloadPage,
+    };
+}
+export function hasBtn(name) {
+    return {
+        content: `Check button ${name} exist`,
+        trigger: `body button:contains(${name})`,
     };
 }
 export function fillTextArea(target, value) {
@@ -192,6 +199,24 @@ export function presetTimingSlotIs(hour) {
 export function selectPresetTimingSlotHour(hour) {
     return { trigger: `.modal button:contains('${hour}')`, run: "click" };
 }
+export function presetTimingSlotHourNotExists(hour) {
+    return { trigger: negate(`.modal button:visible:contains('${hour}')`) };
+}
+export function presetTimingSlotHourExists(hour) {
+    return { trigger: `.modal button:contains('${hour}')` };
+}
+export function selectSlotDays(d) {
+    return {
+        trigger: `.modal .d-flex.w-100.flex-wrap.gap-2.mt-2 button:nth-of-type(${d})`,
+        run: "click",
+    };
+}
+export function selectPresetTimingSlotIndex(index) {
+    return {
+        trigger: `.modal .row div:not(.d-none) .d-flex.flex-wrap.gap-1 button:nth-of-type(${index})`,
+        run: "click",
+    };
+}
 export function clickRegister() {
     return { trigger: ".pos-leftheader .register-label", run: "click" };
 }
@@ -216,6 +241,21 @@ export function waitRequest() {
     ];
 }
 
+export function storedOrderCount(expectedCount) {
+    return {
+        content: `Stored order count should be ${expectedCount}`,
+        trigger: "body",
+        run: () => {
+            const actualCount = posmodel.data.models["pos.order"].length;
+            if (actualCount !== expectedCount) {
+                throw new Error(
+                    `Expected stored order count to be ${expectedCount}, but got ${actualCount}`
+                );
+            }
+        },
+    };
+}
+
 export function isSynced() {
     return {
         content: "Check if the request is proceeded",
@@ -228,6 +268,46 @@ export function clickOnScanButton() {
         content: "Click the Scan button located in the top header.",
         trigger: ".pos-topheader .status-buttons .fa-barcode",
         run: "click",
+    };
+}
+
+export function ClickOnCustomerDisplayButton() {
+    return {
+        content: "Click on the customer display button inside the burger menu",
+        trigger: "span i.fa-desktop",
+        run: "click",
+    };
+}
+export function CustomerDisplayHasThisDeviceButton() {
+    return {
+        content: "Check that the customer display popup has a 'This device' button",
+        trigger: ".o_dialog .modal-body .container .btn-primary:contains('This device')",
+    };
+}
+export function CustomerDisplayHasQRButton() {
+    return {
+        content: "Check that the customer display popup has a 'Display QR' button",
+        trigger: ".o_dialog .modal-body .container .btn-secondary:contains('Display QR')",
+    };
+}
+export function ClickCustomerDisplayThisDeviceButton() {
+    return {
+        content: "Check that the customer display popup has a 'This device' button",
+        trigger: ".btn-primary:contains('This device')",
+        run: "click",
+    };
+}
+export function ClickCustomerDisplayQRButton() {
+    return {
+        content: "Check that the customer display popup has a 'Display QR' button",
+        trigger: ".btn-secondary:contains('Display QR')",
+        run: "click",
+    };
+}
+export function CustomerDisplayQRIsDisplayed() {
+    return {
+        content: "Check that the QR code is displayed on screen",
+        trigger: ".o-overlay-item .modal .modal-body img.square",
     };
 }
 export function freezeDateTime(millis) {

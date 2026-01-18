@@ -73,7 +73,7 @@ export class ProductScreen extends Component {
 
         onWillRender(() => {
             // If its a shared order it can be paid from another POS
-            if (this.currentOrder?.state !== "draft") {
+            if (this.currentOrder?.state !== "draft" && !this.isValidatingOrder) {
                 this.pos.addNewOrder();
             }
         });
@@ -194,7 +194,7 @@ export class ProductScreen extends Component {
         return this.pos.getOrder();
     }
     get total() {
-        return this.env.utils.formatCurrency(this.currentOrder?.getTotalWithTax() ?? 0);
+        return this.currentOrder?.currencyDisplayPrice || 0;
     }
     get items() {
         return this.env.utils.formatProductQty(
@@ -321,10 +321,6 @@ export class ProductScreen extends Component {
         this.pos.switchPane();
     }
 
-    getProductPrice(product) {
-        return this.pos.getProductPrice(product, false, true);
-    }
-
     getProductImage(product) {
         return product.getImageUrl();
     }
@@ -413,7 +409,12 @@ export class ProductScreen extends Component {
     }
 
     async fastValidate(paymentMethod) {
-        await this.pos.validateOrderFast(paymentMethod);
+        try {
+            this.isValidatingOrder = true;
+            await this.pos.validateOrderFast(paymentMethod);
+        } finally {
+            this.isValidatingOrder = false;
+        }
     }
 }
 
